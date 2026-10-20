@@ -21,4 +21,403 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
 .driver-item, .order-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
 .bar-container { height: 8px; background: #eee; border-radius: 4px; margin-top: 4px; overflow: hidden; }
 .bar { height: 100%; background: #1a73e8; transition: width 0.3s; }
-.suggestion { background: #e8f0fe; padding: 12
+.suggestion { background: #e8f0fe; padding: 12px; border-radius: 8px; margin: 8px 0; font-weight: bold; text-align: center; }
+.hidden { display: none; }
+.small { font-size: 0.85rem; color: #666; }
+.flex { display: flex; gap: 8px; flex-wrap: wrap; }
+.flex button { flex: 1; min-width: 80px; }
+.status-online { color: #34a853; font-weight: bold; }
+.status-offline { color: #ea4335; }
+.shift-tag { display: inline-block; background: #f1f3f4; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 6px; }
+.pending-tag { color: #f57c00; font-size: 0.75rem; font-weight: bold; }
+.accepted-tag { color: #2e7d32; font-size: 0.75rem; font-weight: bold; }
+.timeout-tag { color: #d32f2f; font-size: 0.75rem; font-weight: bold; }
+.me-tag { background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+.my-order { background: #e8f5e9 !important; }
+#status { padding: 10px; border-radius: 8px; background: #fff3cd; margin-bottom: 10px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div id="status">載入中...</div>
+<h1>🚚 公平派單系統</h1>
+<p class="small" id="userInfo"></p>
+
+<div class="card">
+  <h2>我的狀態（司機用）</h2>
+  <select id="myDriverSelect"><option value="">選擇我是誰</option></select>
+  <button id="toggleMyStatusBtn" class="secondary">上線</button>
+</div>
+
+<div class="card" id="myOrdersCard" style="display:none;">
+  <h2>我的待接訂單</h2>
+  <div id="myPendingOrders"></div>
+</div>
+
+<div class="card">
+  <h2>司機上線狀態（即時）</h2>
+  <div id="driversList"></div>
+  <div style="margin-top:10px;">
+    <input type="text" id="newDriverName" placeholder="新增司機姓名（店家用）">
+    <select id="newDriverShift">
+      <option value="all">全天</option>
+      <option value="morning">早班</option>
+      <option value="evening">晚班</option>
+      <option value="flexible">彈性</option>
+    </select>
+    <button id="addDriverBtn">新增司機</button>
+  </div>
+  <button id="resetDailyBtn" class="gray">重置今日訂單數</button>
+</div>
+
+<div class="card">
+  <h2>新增訂單（店家用）</h2>
+  <textarea id="orderContent" rows="3" placeholder="訂單內容 / 地址"></textarea>
+  <input type="text" id="orderNote" placeholder="備註（選填）">
+  <button id="suggestBtn">建議派單</button>
+  <div id="suggestionBox" class="suggestion hidden"></div>
+  <div id="assignButtons" class="flex hidden">
+    <button id="confirmAssignBtn" class="secondary">確認派單</button>
+    <button id="manualAssignBtn" class="gray">手動選擇</button>
+  </div>
+  <div id="manualSelect" class="hidden">
+    <select id="driverSelect"></select>
+    <button id="assignSelectedBtn">派給選中司機</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>目前上線司機負載</h2>
+  <div id="loadChart"></div>
+</div>
+
+<div class="card">
+  <h2>所有訂單狀態</h2>
+  <div id="activeOrders"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, updateDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCylh0Kd3LsRt9k6hipcFpUdr40KG_kjTw",
+  authDomain: "liveinjiali.firebaseapp.com",
+  projectId: "liveinjiali",
+  storageBucket: "liveinjiali.firebasestorage.app",
+  messagingSenderId: "757070771946",
+  appId: "1:757070771946:web:42ded7850149b74448c993",
+  measurementId: "G-4L9EZSGGTJ"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+let drivers = [];
+let orders = [];
+let nextOrderId = 1;
+let myDriverId = localStorage.getItem('myDriverId') || null;
+const TIMEOUT_MS = 60 * 1000;
+
+function showStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+async function initLiff() {
+  try {
+    showStatus('正在初始化 LIFF...');
+    await liff.init({ liffId: "2012126765-B8WhFSkh" });
+    if (!liff.isLoggedIn()) {
+      liff.login();
+      return;
+    }
+    const profile = await liff.getProfile();
+    document.getElementById('userInfo').textContent = `已登入：${profile.displayName}`;
+    showStatus('載入完成');
+    listenData();
+    bindEvents();
+  } catch (e) {
+    showStatus('LIFF 錯誤：' + e.message);
+  }
+}
+
+function shiftLabel(s) {
+  return { morning: '早班', evening: '晚班', all: '全天', flexible: '彈性' }[s] || s;
+}
+
+function isTimedOut(order) {
+  if (order.status !== 'pending' || !order.assignedAt) return false;
+  return Date.now() - new Date(order.assignedAt).getTime() > TIMEOUT_MS;
+}
+
+function listenData() {
+  onSnapshot(collection(db, 'drivers'), (snap) => {
+    drivers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    render();
+  });
+  onSnapshot(query(collection(db, 'orders'), orderBy('createdAt', 'desc')), (snap) => {
+    orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (orders.length) {
+      const maxId = Math.max(...orders.map(o => parseInt(o.orderNumber) || 0));
+      nextOrderId = maxId + 1;
+    }
+    render();
+  });
+}
+
+function bindEvents() {
+  document.getElementById('addDriverBtn').onclick = addDriver;
+  document.getElementById('toggleMyStatusBtn').onclick = toggleMyStatus;
+  document.getElementById('resetDailyBtn').onclick = resetDaily;
+  document.getElementById('suggestBtn').onclick = suggestAssignment;
+  document.getElementById('confirmAssignBtn').onclick = confirmAssign;
+  document.getElementById('manualAssignBtn').onclick = manualAssign;
+  document.getElementById('assignSelectedBtn').onclick = assignToSelected;
+}
+
+async function addDriver() {
+  const name = document.getElementById('newDriverName').value.trim();
+  const shift = document.getElementById('newDriverShift').value;
+  if (!name) return alert('請輸入姓名');
+  const id = Date.now().toString();
+  await setDoc(doc(db, 'drivers', id), {
+    name, shift, status: 'offline', todayOrders: 0, totalOrders: 0
+  });
+  document.getElementById('newDriverName').value = '';
+  alert('已新增司機：' + name);
+}
+
+async function toggleMyStatus() {
+  if (!myDriverId) return alert('請先選擇你是誰');
+  const driver = drivers.find(d => d.id === myDriverId);
+  if (!driver) return;
+  const newStatus = driver.status === 'online' ? 'offline' : 'online';
+  await updateDoc(doc(db, 'drivers', myDriverId), { status: newStatus });
+}
+
+async function resetDaily() {
+  if (!confirm('重置所有司機今日訂單數？')) return;
+  for (const d of drivers) {
+    await updateDoc(doc(db, 'drivers', d.id), { todayOrders: 0 });
+  }
+  alert('已重置');
+}
+
+function getOnlineDrivers(excludeId = null) {
+  return drivers.filter(d => d.status === 'online' && d.id !== excludeId);
+}
+
+function getLeastLoaded(excludeId = null) {
+  const online = getOnlineDrivers(excludeId);
+  if (!online.length) return null;
+  const min = Math.min(...online.map(d => d.todayOrders || 0));
+  const cands = online.filter(d => (d.todayOrders || 0) === min);
+  return cands[Math.floor(Math.random() * cands.length)];
+}
+
+let suggested = null;
+let pending = null;
+
+function suggestAssignment() {
+  const content = document.getElementById('orderContent').value.trim();
+  if (!content) return alert('請輸入訂單內容');
+  if (!getOnlineDrivers().length) return alert('目前沒有司機上線');
+  suggested = getLeastLoaded();
+  pending = { content, note: document.getElementById('orderNote').value.trim() };
+  document.getElementById('suggestionBox').innerHTML = `建議派給：<strong>${suggested.name}</strong>（今日 ${suggested.todayOrders || 0} 單）`;
+  document.getElementById('suggestionBox').classList.remove('hidden');
+  document.getElementById('assignButtons').classList.remove('hidden');
+}
+
+async function confirmAssign() {
+  if (!suggested || !pending) return;
+  await assignOrder(suggested.id, pending.content, pending.note);
+  clearPending();
+}
+
+function manualAssign() {
+  const sel = document.getElementById('driverSelect');
+  sel.innerHTML = getOnlineDrivers().map(d => `<option value="${d.id}">${d.name}（${d.todayOrders || 0} 單）</option>`).join('');
+  document.getElementById('manualSelect').classList.remove('hidden');
+}
+
+async function assignToSelected() {
+  const id = document.getElementById('driverSelect').value;
+  if (!id || !pending) return;
+  await assignOrder(id, pending.content, pending.note);
+  clearPending();
+}
+
+function clearPending() {
+  document.getElementById('orderContent').value = '';
+  document.getElementById('orderNote').value = '';
+  document.getElementById('suggestionBox').classList.add('hidden');
+  document.getElementById('assignButtons').classList.add('hidden');
+  document.getElementById('manualSelect').classList.add('hidden');
+  pending = null;
+  suggested = null;
+}
+
+async function assignOrder(driverId, content, note, existingId = null) {
+  const driver = drivers.find(d => d.id === driverId);
+  if (!driver) return;
+  const orderNumber = existingId ? (orders.find(o => o.id === existingId)?.orderNumber || nextOrderId++) : nextOrderId++;
+  const now = new Date().toISOString();
+  const orderData = {
+    orderNumber, content, note: note || '', driverId, driverName: driver.name,
+    status: 'pending', assignedAt: now, createdAt: now, acceptedAt: null,
+    timeoutHandled: false, rejectedBy: existingId ? (orders.find(o => o.id === existingId)?.rejectedBy || []) : []
+  };
+  const orderRef = existingId ? doc(db, 'orders', existingId) : doc(db, 'orders', Date.now().toString());
+  await setDoc(orderRef, orderData);
+  await updateDoc(doc(db, 'drivers', driverId), {
+    todayOrders: (driver.todayOrders || 0) + 1,
+    totalOrders: (driver.totalOrders || 0) + 1
+  });
+  alert(`已派給 ${driver.name}（待接單）`);
+}
+
+async function acceptOrder(orderId) {
+  const order = orders.find(o => o.id === orderId);
+  if (!order) return;
+  if (order.driverId !== myDriverId) return alert('這不是派給你的訂單');
+  if (isTimedOut(order)) return alert('已超過 1 分鐘，無法再接單');
+  await updateDoc(doc(db, 'orders', orderId), { status: 'accepted', acceptedAt: new Date().toISOString() });
+  alert('已接單！');
+}
+
+async function rejectOrder(orderId) {
+  const order = orders.find(o => o.id === orderId);
+  if (!order || !confirm('確定拒絕 / 轉派這筆？')) return;
+  const driver = drivers.find(d => d.id === order.driverId);
+  if (driver) await updateDoc(doc(db, 'drivers', driver.id), { todayOrders: Math.max(0, (driver.todayOrders || 0) - 1) });
+  const rejectedBy = [...(order.rejectedBy || []), order.driverName || '未知'];
+  await updateDoc(doc(db, 'orders', orderId), { status: 'rejected', driverId: null, driverName: null, rejectedBy });
+  const next = getLeastLoaded();
+  if (next && confirm(`建議轉派給 ${next.name}？`)) {
+    await assignOrder(next.id, order.content, order.note, orderId);
+  }
+}
+
+async function completeOrder(id) {
+  await updateDoc(doc(db, 'orders', id), { status: 'completed' });
+}
+
+async function cancelOrder(id) {
+  if (!confirm('取消訂單？')) return;
+  const order = orders.find(o => o.id === id);
+  if (order?.driverId) {
+    const d = drivers.find(x => x.id === order.driverId);
+    if (d) await updateDoc(doc(db, 'drivers', d.id), { todayOrders: Math.max(0, (d.todayOrders || 0) - 1) });
+  }
+  await updateDoc(doc(db, 'orders', id), { status: 'cancelled' });
+}
+
+function statusLabel(order) {
+  if (order.status === 'pending' && isTimedOut(order)) return '<span class="timeout-tag">超時未接</span>';
+  if (order.status === 'pending') return '<span class="pending-tag">待接單</span>';
+  if (order.status === 'accepted') return '<span class="accepted-tag">已接單</span>';
+  if (order.status === 'rejected') return '<span class="timeout-tag">待轉派</span>';
+  return order.status;
+}
+
+function render() {
+  const sel = document.getElementById('myDriverSelect');
+  const current = sel.value || myDriverId;
+  sel.innerHTML = '<option value="">選擇我是誰</option>' + drivers.map(d => `<option value="${d.id}" ${d.id === current ? 'selected' : ''}>${d.name}</option>`).join('');
+  sel.onchange = () => {
+    myDriverId = sel.value;
+    localStorage.setItem('myDriverId', myDriverId);
+    updateMyButton();
+    render();
+  };
+  updateMyButton();
+
+  const myPending = orders.filter(o => o.status === 'pending' && o.driverId === myDriverId && !isTimedOut(o));
+  const myCard = document.getElementById('myOrdersCard');
+  if (myPending.length && myDriverId) {
+    myCard.style.display = 'block';
+    document.getElementById('myPendingOrders').innerHTML = myPending.map(o => `
+      <div class="order-item my-order">
+        <div><strong>#${o.orderNumber}</strong> ${statusLabel(o)}<br><span class="small">${o.content}</span></div>
+        <div>
+          <button class="secondary small-btn" data-action="accept" data-id="${o.id}">接單</button>
+          <button class="warning small-btn" data-action="reject" data-id="${o.id}">拒絕</button>
+        </div>
+      </div>
+    `).join('');
+    document.getElementById('myPendingOrders').onclick = (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      if (btn.dataset.action === 'accept') acceptOrder(btn.dataset.id);
+      if (btn.dataset.action === 'reject') rejectOrder(btn.dataset.id);
+    };
+  } else {
+    myCard.style.display = 'none';
+  }
+
+  document.getElementById('driversList').innerHTML = drivers.map(d => `
+    <div class="driver-item">
+      <div>
+        <strong>${d.name}</strong> <span class="shift-tag">${shiftLabel(d.shift)}</span>
+        ${d.id === myDriverId ? '<span class="me-tag">我</span>' : ''}
+        <div class="small">
+          <span class="${d.status === 'online' ? 'status-online' : 'status-offline'}">${d.status === 'online' ? '● 上線' : '○ 離線'}</span>
+          ｜今日 ${d.todayOrders || 0} 單
+        </div>
+      </div>
+    </div>
+  `).join('') || '<p class="small">尚無司機</p>';
+
+  const online = getOnlineDrivers();
+  const max = Math.max(1, ...online.map(d => d.todayOrders || 0));
+  document.getElementById('loadChart').innerHTML = online.length ? online.map(d => `
+    <div style="margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;"><span>${d.name}</span><span>${d.todayOrders || 0} 單</span></div>
+      <div class="bar-container"><div class="bar" style="width:${((d.todayOrders||0)/max)*100}%"></div></div>
+    </div>
+  `).join('') : '<p class="small">目前無人上線</p>';
+
+  const active = orders.filter(o => ['pending', 'accepted', 'rejected'].includes(o.status));
+  document.getElementById('activeOrders').innerHTML = active.length ? active.map(o => {
+    const timedOut = isTimedOut(o);
+    return `<div class="order-item ${o.driverId === myDriverId ? 'my-order' : ''}">
+      <div>
+        <strong>#${o.orderNumber}</strong> → ${o.driverName || '未指派'} ${statusLabel(o)}<br>
+        <span class="small">${o.content}</span>
+        ${o.acceptedAt ? `<br><span class="small">接單時間：${new Date(o.acceptedAt).toLocaleString('zh-TW')}</span>` : ''}
+        ${timedOut ? `<br><span class="small" style="color:#d32f2f;">已超過 1 分鐘未接單</span>` : ''}
+      </div>
+      <div class="flex" style="width:auto;">
+        ${o.status === 'accepted' ? `<button class="secondary small-btn" data-action="complete" data-id="${o.id}">完成</button>` : ''}
+        ${(o.status === 'pending' || o.status === 'rejected' || timedOut) ? `<button class="warning small-btn" data-action="reject" data-id="${o.id}">轉派下一位</button>` : ''}
+        <button class="danger small-btn" data-action="cancel" data-id="${o.id}">取消</button>
+      </div>
+    </div>`;
+  }).join('') : '<p class="small">無進行中訂單</p>';
+
+  document.getElementById('activeOrders').onclick = (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    if (btn.dataset.action === 'complete') completeOrder(id);
+    if (btn.dataset.action === 'reject') rejectOrder(id);
+    if (btn.dataset.action === 'cancel') cancelOrder(id);
+  };
+}
+
+function updateMyButton() {
+  const d = drivers.find(x => x.id === myDriverId);
+  const btn = document.getElementById('toggleMyStatusBtn');
+  if (d) {
+    btn.textContent = d.status === 'online' ? '下線' : '上線';
+    btn.className = d.status === 'online' ? 'danger' : 'secondary';
+  } else {
+    btn.textContent = '請先選擇身分';
+  }
+}
+
+setInterval(render, 10000);
+initLiff();
+</script>
+</body>
+</html>
