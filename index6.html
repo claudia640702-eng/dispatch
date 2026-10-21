@@ -34,6 +34,7 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
 .my-order { background: #e8f5e9 !important; }
 .queue-tag { font-size: 0.75rem; color: #1a73e8; margin-left: 6px; }
 .note { color: #555; font-size: 0.85rem; margin-top: 4px; }
+.stats { font-size: 0.8rem; color: #555; margin-top: 2px; }
 #status { padding: 10px; border-radius: 8px; background: #fff3cd; margin-bottom: 10px; font-size: 0.9rem; }
 </style>
 </head>
@@ -66,7 +67,6 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
     </select>
     <button id="addDriverBtn">新增司機</button>
   </div>
-  <button id="resetDailyBtn" class="gray">重置今日訂單數</button>
 </div>
 
 <div class="card">
@@ -154,8 +154,6 @@ function listenData() {
   onSnapshot(collection(db, 'drivers'), (snap) => {
     drivers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     render();
-  }, (err) => {
-    showStatus('讀取司機失敗：' + err.message);
   });
   onSnapshot(query(collection(db, 'orders'), orderBy('createdAt', 'desc')), (snap) => {
     orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -170,7 +168,6 @@ function listenData() {
 function bindEvents() {
   document.getElementById('addDriverBtn').onclick = addDriver;
   document.getElementById('toggleMyStatusBtn').onclick = toggleMyStatus;
-  document.getElementById('resetDailyBtn').onclick = resetDaily;
   document.getElementById('suggestBtn').onclick = suggestAssignment;
   document.getElementById('confirmAssignBtn').onclick = confirmAssign;
   document.getElementById('manualAssignBtn').onclick = manualAssign;
@@ -184,13 +181,12 @@ async function addDriver() {
   try {
     const id = Date.now().toString();
     await setDoc(doc(db, 'drivers', id), {
-      name, shift, status: 'offline', todayOrders: 0, totalOrders: 0, onlineAt: null
+      name, shift, status: 'offline', onlineAt: null
     });
     document.getElementById('newDriverName').value = '';
     alert('已新增司機：' + name);
   } catch (err) {
     alert('新增失敗：' + err.message);
-    showStatus('新增司機錯誤：' + err.message);
   }
 }
 
@@ -200,25 +196,11 @@ async function toggleMyStatus() {
   if (!driver) return;
   const newStatus = driver.status === 'online' ? 'offline' : 'online';
   const update = { status: newStatus };
-  if (newStatus === 'online') {
-    update.onlineAt = new Date().toISOString();
-  }
+  if (newStatus === 'online') update.onlineAt = new Date().toISOString();
   try {
     await updateDoc(doc(db, 'drivers', myDriverId), update);
   } catch (err) {
     alert('更新狀態失敗：' + err.message);
-  }
-}
-
-async function resetDaily() {
-  if (!confirm('重置所有司機今日訂單數？')) return;
-  try {
-    for (const d of drivers) {
-      await updateDoc(doc(db, 'drivers', d.id), { todayOrders: 0 });
-    }
-    alert('已重置');
-  } catch (err) {
-    alert('重置失敗：' + err.message);
   }
 }
 
@@ -239,6 +221,14 @@ function getNextDriver(excludeId = null) {
   const next = online[currentQueueIndex];
   currentQueueIndex = (currentQueueIndex + 1) % online.length;
   return next;
+}
+
+function getDriverStats(driverId) {
+  const driverOrders = orders.filter(o => o.driverId === driverId || (o.rejectedBy || []).includes(drivers.find(d => d.id === driverId)?.name));
+  const accepted = orders.filter(o => o.driverId === driverId && o.status === 'accepted').length;
+  const rejected = orders.filter(o => (o.rejectedBy || []).includes(drivers.find(d => d.id === driverId)?.name)).length;
+  const pending = orders.filter(o => o.driverId === driverId && o.status === 'pending').length;
+  return { accepted, rejected, pending };
 }
 
 let suggested = null;
@@ -294,15 +284,11 @@ async function assignOrder(driverId, content, note, existingId = null) {
   const orderData = {
     orderNumber, content, note: note || '', driverId, driverName: driver.name,
     status: 'pending', assignedAt: now, createdAt: now, acceptedAt: null,
-    timeoutHandled: false, rejectedBy: existingId ? (orders.find(o => o.id === existingId)?.rejectedBy || []) : []
+    rejectedBy: existingId ? (orders.find(o => o.id === existingId)?.rejectedBy || []) : []
   };
   const orderRef = existingId ? doc(db, 'orders', existingId) : doc(db, 'orders', Date.now().toString());
   try {
     await setDoc(orderRef, orderData);
-    await updateDoc(doc(db, 'drivers', driverId), {
-      todayOrders: (driver.todayOrders || 0) + 1,
-      totalOrders: (driver.totalOrders || 0) + 1
-    });
     alert(`已派給 ${driver.name}（待接單）`);
   } catch (err) {
     alert('派單失敗：' + err.message);
@@ -326,8 +312,6 @@ async function rejectOrder(orderId) {
   const order = orders.find(o => o.id === orderId);
   if (!order || !confirm('確定拒絕 / 轉派這筆？')) return;
   try {
-    const driver = drivers.find(d => d.id === order.driverId);
-    if (driver) await updateDoc(doc(db, 'drivers', driver.id), { todayOrders: Math.max(0, (driver.todayOrders || 0) - 1) });
     const rejectedBy = [...(order.rejectedBy || []), order.driverName || '未知'];
     await updateDoc(doc(db, 'orders', orderId), { status: 'rejected', driverId: null, driverName: null, rejectedBy });
     const next = getNextDriver(order.driverId);
@@ -350,11 +334,6 @@ async function completeOrder(id) {
 async function cancelOrder(id) {
   if (!confirm('取消訂單？')) return;
   try {
-    const order = orders.find(o => o.id === id);
-    if (order?.driverId) {
-      const d = drivers.find(x => x.id === order.driverId);
-      if (d) await updateDoc(doc(db, 'drivers', d.id), { todayOrders: Math.max(0, (d.todayOrders || 0) - 1) });
-    }
     await updateDoc(doc(db, 'orders', id), { status: 'cancelled' });
   } catch (err) {
     alert('取消失敗：' + err.message);
@@ -409,19 +388,21 @@ function render() {
   }
 
   const onlineSorted = getOnlineDriversSorted();
-  document.getElementById('driversList').innerHTML = drivers.map(d => `
+  document.getElementById('driversList').innerHTML = drivers.map(d => {
+    const stats = getDriverStats(d.id);
+    return `
     <div class="driver-item">
       <div>
         <strong>${d.name}</strong> <span class="shift-tag">${shiftLabel(d.shift)}</span>
         ${d.id === myDriverId ? '<span class="me-tag">我</span>' : ''}
         <div class="small">
           <span class="${d.status === 'online' ? 'status-online' : 'status-offline'}">${d.status === 'online' ? '● 上線' : '○ 離線'}</span>
-          ｜今日 ${d.todayOrders || 0} 單
           ${d.status === 'online' && d.onlineAt ? `<span class="queue-tag">第 ${onlineSorted.findIndex(x => x.id === d.id) + 1} 順位</span>` : ''}
         </div>
+        <div class="stats">已接 ${stats.accepted}　拒絕 ${stats.rejected}　未接 ${stats.pending}</div>
       </div>
-    </div>
-  `).join('') || '<p class="small">尚無司機</p>';
+    </div>`;
+  }).join('') || '<p class="small">尚無司機</p>';
 
   document.getElementById('queueList').innerHTML = onlineSorted.length ? onlineSorted.map((d, i) => `
     <div style="padding:6px 0; border-bottom:1px solid #eee;">
