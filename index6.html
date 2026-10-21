@@ -154,6 +154,8 @@ function listenData() {
   onSnapshot(collection(db, 'drivers'), (snap) => {
     drivers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     render();
+  }, (err) => {
+    showStatus('讀取司機失敗：' + err.message);
   });
   onSnapshot(query(collection(db, 'orders'), orderBy('createdAt', 'desc')), (snap) => {
     orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -179,12 +181,17 @@ async function addDriver() {
   const name = document.getElementById('newDriverName').value.trim();
   const shift = document.getElementById('newDriverShift').value;
   if (!name) return alert('請輸入姓名');
-  const id = Date.now().toString();
-  await setDoc(doc(db, 'drivers', id), {
-    name, shift, status: 'offline', todayOrders: 0, totalOrders: 0, onlineAt: null
-  });
-  document.getElementById('newDriverName').value = '';
-  alert('已新增司機：' + name);
+  try {
+    const id = Date.now().toString();
+    await setDoc(doc(db, 'drivers', id), {
+      name, shift, status: 'offline', todayOrders: 0, totalOrders: 0, onlineAt: null
+    });
+    document.getElementById('newDriverName').value = '';
+    alert('已新增司機：' + name);
+  } catch (err) {
+    alert('新增失敗：' + err.message);
+    showStatus('新增司機錯誤：' + err.message);
+  }
 }
 
 async function toggleMyStatus() {
@@ -196,15 +203,23 @@ async function toggleMyStatus() {
   if (newStatus === 'online') {
     update.onlineAt = new Date().toISOString();
   }
-  await updateDoc(doc(db, 'drivers', myDriverId), update);
+  try {
+    await updateDoc(doc(db, 'drivers', myDriverId), update);
+  } catch (err) {
+    alert('更新狀態失敗：' + err.message);
+  }
 }
 
 async function resetDaily() {
   if (!confirm('重置所有司機今日訂單數？')) return;
-  for (const d of drivers) {
-    await updateDoc(doc(db, 'drivers', d.id), { todayOrders: 0 });
+  try {
+    for (const d of drivers) {
+      await updateDoc(doc(db, 'drivers', d.id), { todayOrders: 0 });
+    }
+    alert('已重置');
+  } catch (err) {
+    alert('重置失敗：' + err.message);
   }
-  alert('已重置');
 }
 
 function getOnlineDriversSorted() {
@@ -282,12 +297,16 @@ async function assignOrder(driverId, content, note, existingId = null) {
     timeoutHandled: false, rejectedBy: existingId ? (orders.find(o => o.id === existingId)?.rejectedBy || []) : []
   };
   const orderRef = existingId ? doc(db, 'orders', existingId) : doc(db, 'orders', Date.now().toString());
-  await setDoc(orderRef, orderData);
-  await updateDoc(doc(db, 'drivers', driverId), {
-    todayOrders: (driver.todayOrders || 0) + 1,
-    totalOrders: (driver.totalOrders || 0) + 1
-  });
-  alert(`已派給 ${driver.name}（待接單）`);
+  try {
+    await setDoc(orderRef, orderData);
+    await updateDoc(doc(db, 'drivers', driverId), {
+      todayOrders: (driver.todayOrders || 0) + 1,
+      totalOrders: (driver.totalOrders || 0) + 1
+    });
+    alert(`已派給 ${driver.name}（待接單）`);
+  } catch (err) {
+    alert('派單失敗：' + err.message);
+  }
 }
 
 async function acceptOrder(orderId) {
@@ -295,35 +314,51 @@ async function acceptOrder(orderId) {
   if (!order) return;
   if (order.driverId !== myDriverId) return alert('這不是派給你的訂單');
   if (isTimedOut(order)) return alert('已超過 1 分鐘，無法再接單');
-  await updateDoc(doc(db, 'orders', orderId), { status: 'accepted', acceptedAt: new Date().toISOString() });
-  alert('已接單！');
+  try {
+    await updateDoc(doc(db, 'orders', orderId), { status: 'accepted', acceptedAt: new Date().toISOString() });
+    alert('已接單！');
+  } catch (err) {
+    alert('接單失敗：' + err.message);
+  }
 }
 
 async function rejectOrder(orderId) {
   const order = orders.find(o => o.id === orderId);
   if (!order || !confirm('確定拒絕 / 轉派這筆？')) return;
-  const driver = drivers.find(d => d.id === order.driverId);
-  if (driver) await updateDoc(doc(db, 'drivers', driver.id), { todayOrders: Math.max(0, (driver.todayOrders || 0) - 1) });
-  const rejectedBy = [...(order.rejectedBy || []), order.driverName || '未知'];
-  await updateDoc(doc(db, 'orders', orderId), { status: 'rejected', driverId: null, driverName: null, rejectedBy });
-  const next = getNextDriver(order.driverId);
-  if (next && confirm(`建議轉派給 ${next.name}？`)) {
-    await assignOrder(next.id, order.content, order.note, orderId);
+  try {
+    const driver = drivers.find(d => d.id === order.driverId);
+    if (driver) await updateDoc(doc(db, 'drivers', driver.id), { todayOrders: Math.max(0, (driver.todayOrders || 0) - 1) });
+    const rejectedBy = [...(order.rejectedBy || []), order.driverName || '未知'];
+    await updateDoc(doc(db, 'orders', orderId), { status: 'rejected', driverId: null, driverName: null, rejectedBy });
+    const next = getNextDriver(order.driverId);
+    if (next && confirm(`建議轉派給 ${next.name}？`)) {
+      await assignOrder(next.id, order.content, order.note, orderId);
+    }
+  } catch (err) {
+    alert('轉派失敗：' + err.message);
   }
 }
 
 async function completeOrder(id) {
-  await updateDoc(doc(db, 'orders', id), { status: 'completed' });
+  try {
+    await updateDoc(doc(db, 'orders', id), { status: 'completed' });
+  } catch (err) {
+    alert('完成失敗：' + err.message);
+  }
 }
 
 async function cancelOrder(id) {
   if (!confirm('取消訂單？')) return;
-  const order = orders.find(o => o.id === id);
-  if (order?.driverId) {
-    const d = drivers.find(x => x.id === order.driverId);
-    if (d) await updateDoc(doc(db, 'drivers', d.id), { todayOrders: Math.max(0, (d.todayOrders || 0) - 1) });
+  try {
+    const order = orders.find(o => o.id === id);
+    if (order?.driverId) {
+      const d = drivers.find(x => x.id === order.driverId);
+      if (d) await updateDoc(doc(db, 'drivers', d.id), { todayOrders: Math.max(0, (d.todayOrders || 0) - 1) });
+    }
+    await updateDoc(doc(db, 'orders', id), { status: 'cancelled' });
+  } catch (err) {
+    alert('取消失敗：' + err.message);
   }
-  await updateDoc(doc(db, 'orders', id), { status: 'cancelled' });
 }
 
 function statusLabel(order) {
@@ -435,4 +470,8 @@ function updateMyButton() {
   }
 }
 
-setInterval(render
+setInterval(render, 10000);
+initLiff();
+</script>
+</body>
+</html>
