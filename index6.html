@@ -33,6 +33,7 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
 .me-tag { background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
 .my-order { background: #e8f5e9 !important; }
 .queue-tag { font-size: 0.75rem; color: #1a73e8; margin-left: 6px; }
+.note { color: #555; font-size: 0.85rem; margin-top: 4px; }
 #status { padding: 10px; border-radius: 8px; background: #fff3cd; margin-bottom: 10px; font-size: 0.9rem; }
 </style>
 </head>
@@ -351,7 +352,11 @@ function render() {
     myCard.style.display = 'block';
     document.getElementById('myPendingOrders').innerHTML = myPending.map(o => `
       <div class="order-item my-order">
-        <div><strong>#${o.orderNumber}</strong> ${statusLabel(o)}<br><span class="small">${o.content}</span></div>
+        <div>
+          <strong>#${o.orderNumber}</strong> ${statusLabel(o)}<br>
+          <span class="small">${o.content}</span>
+          ${o.note ? `<div class="note">備註：${o.note}</div>` : ''}
+        </div>
         <div>
           <button class="secondary small-btn" data-action="accept" data-id="${o.id}">接單</button>
           <button class="warning small-btn" data-action="reject" data-id="${o.id}">拒絕</button>
@@ -397,6 +402,7 @@ function render() {
       <div>
         <strong>#${o.orderNumber}</strong> → ${o.driverName || '未指派'} ${statusLabel(o)}<br>
         <span class="small">${o.content}</span>
+        ${o.note ? `<div class="note">備註：${o.note}</div>` : ''}
         ${o.acceptedAt ? `<br><span class="small">接單時間：${new Date(o.acceptedAt).toLocaleString('zh-TW')}</span>` : ''}
         ${timedOut ? `<br><span class="small" style="color:#d32f2f;">已超過 1 分鐘未接單</span>` : ''}
       </div>
@@ -429,8 +435,4 @@ function updateMyButton() {
   }
 }
 
-setInterval(render, 10000);
-initLiff();
-</script>
-</body>
-</html>
+setInterval(render
