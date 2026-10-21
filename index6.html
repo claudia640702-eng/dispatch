@@ -30,6 +30,7 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
 .pending-tag { color: #f57c00; font-size: 0.75rem; font-weight: bold; }
 .accepted-tag { color: #2e7d32; font-size: 0.75rem; font-weight: bold; }
 .timeout-tag { color: #d32f2f; font-size: 0.75rem; font-weight: bold; }
+.completed-tag { color: #666; font-size: 0.75rem; font-weight: bold; }
 .me-tag { background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
 .my-order { background: #e8f5e9 !important; }
 .queue-tag { font-size: 0.75rem; color: #1a73e8; margin-left: 6px; }
@@ -95,9 +96,15 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
   <div id="activeOrders"></div>
 </div>
 
+<div class="card">
+  <h2>已完成訂單</h2>
+  <div id="completedOrders"></div>
+  <button id="clearCompletedBtn" class="danger" style="margin-top:12px;">一鍵清除已完成訂單</button>
+</div>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, collection, doc, setDoc, updateDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCylh0Kd3LsRt9k6hipcFpUdr40KG_kjTw",
@@ -172,6 +179,7 @@ function bindEvents() {
   document.getElementById('confirmAssignBtn').onclick = confirmAssign;
   document.getElementById('manualAssignBtn').onclick = manualAssign;
   document.getElementById('assignSelectedBtn').onclick = assignToSelected;
+  document.getElementById('clearCompletedBtn').onclick = clearCompletedOrders;
 }
 
 async function addDriver() {
@@ -224,9 +232,9 @@ function getNextDriver(excludeId = null) {
 }
 
 function getDriverStats(driverId) {
-  const driverOrders = orders.filter(o => o.driverId === driverId || (o.rejectedBy || []).includes(drivers.find(d => d.id === driverId)?.name));
+  const driverName = drivers.find(d => d.id === driverId)?.name;
   const accepted = orders.filter(o => o.driverId === driverId && o.status === 'accepted').length;
-  const rejected = orders.filter(o => (o.rejectedBy || []).includes(drivers.find(d => d.id === driverId)?.name)).length;
+  const rejected = orders.filter(o => (o.rejectedBy || []).includes(driverName)).length;
   const pending = orders.filter(o => o.driverId === driverId && o.status === 'pending').length;
   return { accepted, rejected, pending };
 }
@@ -325,7 +333,7 @@ async function rejectOrder(orderId) {
 
 async function completeOrder(id) {
   try {
-    await updateDoc(doc(db, 'orders', id), { status: 'completed' });
+    await updateDoc(doc(db, 'orders', id), { status: 'completed', completedAt: new Date().toISOString() });
   } catch (err) {
     alert('完成失敗：' + err.message);
   }
@@ -340,11 +348,25 @@ async function cancelOrder(id) {
   }
 }
 
+async function clearCompletedOrders() {
+  if (!confirm('確定清除所有已完成訂單？此動作無法復原。')) return;
+  try {
+    const completed = orders.filter(o => o.status === 'completed');
+    for (const o of completed) {
+      await deleteDoc(doc(db, 'orders', o.id));
+    }
+    alert(`已清除 ${completed.length} 筆已完成訂單`);
+  } catch (err) {
+    alert('清除失敗：' + err.message);
+  }
+}
+
 function statusLabel(order) {
   if (order.status === 'pending' && isTimedOut(order)) return '<span class="timeout-tag">超時未接</span>';
   if (order.status === 'pending') return '<span class="pending-tag">待接單</span>';
   if (order.status === 'accepted') return '<span class="accepted-tag">已接單</span>';
   if (order.status === 'rejected') return '<span class="timeout-tag">待轉派</span>';
+  if (order.status === 'completed') return '<span class="completed-tag">已完成</span>';
   return order.status;
 }
 
@@ -438,6 +460,18 @@ function render() {
     if (btn.dataset.action === 'reject') rejectOrder(id);
     if (btn.dataset.action === 'cancel') cancelOrder(id);
   };
+
+  const completed = orders.filter(o => o.status === 'completed');
+  document.getElementById('completedOrders').innerHTML = completed.length ? completed.map(o => `
+    <div class="order-item">
+      <div>
+        <strong>#${o.orderNumber}</strong> → ${o.driverName || '未知'} <span class="completed-tag">已完成</span><br>
+        <span class="small">${o.content}</span>
+        ${o.note ? `<div class="note">備註：${o.note}</div>` : ''}
+        ${o.completedAt ? `<br><span class="small">完成時間：${new Date(o.completedAt).toLocaleString('zh-TW')}</span>` : ''}
+      </div>
+    </div>
+  `).join('') : '<p class="small">尚無已完成訂單</p>';
 }
 
 function updateMyButton() {
