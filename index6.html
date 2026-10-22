@@ -128,7 +128,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ========== 修改這裡的密碼 ==========
-const OWNER_PIN = "1234";
+const OWNER_PIN = "8561";
 // ====================================
 
 let drivers = [];
@@ -213,6 +213,7 @@ function unlockOwner() {
     isOwnerUnlocked = true;
     sessionStorage.setItem('ownerUnlocked', 'true');
     updateOwnerUI();
+    render();
     document.getElementById('ownerPin').value = '';
   } else {
     alert('密碼錯誤');
@@ -358,6 +359,7 @@ async function acceptOrder(orderId) {
 }
 
 async function rejectOrder(orderId) {
+  if (!isOwnerUnlocked) return alert('請先解鎖店家功能才能轉派');
   const order = orders.find(o => o.id === orderId);
   if (!order || !confirm('確定拒絕 / 轉派這筆？')) return;
   try {
@@ -381,6 +383,7 @@ async function completeOrder(id) {
 }
 
 async function cancelOrder(id) {
+  if (!isOwnerUnlocked) return alert('請先解鎖店家功能');
   if (!confirm('取消訂單？')) return;
   try {
     await updateDoc(doc(db, 'orders', id), { status: 'cancelled' });
@@ -488,8 +491,8 @@ function render() {
       </div>
       <div class="flex" style="width:auto;">
         ${o.status === 'accepted' ? `<button class="secondary small-btn" data-action="complete" data-id="${o.id}">完成</button>` : ''}
-        ${(o.status === 'pending' || o.status === 'rejected' || timedOut) ? `<button class="warning small-btn" data-action="reject" data-id="${o.id}">轉派下一位</button>` : ''}
-        <button class="danger small-btn" data-action="cancel" data-id="${o.id}">取消</button>
+        ${isOwnerUnlocked && (o.status === 'pending' || o.status === 'rejected' || timedOut) ? `<button class="warning small-btn" data-action="reject" data-id="${o.id}">轉派下一位</button>` : ''}
+        ${isOwnerUnlocked ? `<button class="danger small-btn" data-action="cancel" data-id="${o.id}">取消</button>` : ''}
       </div>
     </div>`;
   }).join('') : '<p class="small">無進行中訂單</p>';
