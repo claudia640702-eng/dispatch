@@ -37,6 +37,7 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
 .note { color: #555; font-size: 0.85rem; margin-top: 4px; }
 .stats { font-size: 0.8rem; color: #555; margin-top: 2px; }
 #status { padding: 10px; border-radius: 8px; background: #fff3cd; margin-bottom: 10px; font-size: 0.9rem; }
+.lock-overlay { background: #fff; border: 2px dashed #ddd; border-radius: 12px; padding: 20px; text-align: center; }
 </style>
 </head>
 <body>
@@ -70,19 +71,26 @@ button.small-btn { width: auto; padding: 6px 10px; margin: 0 2px; font-size: 0.8
   </div>
 </div>
 
-<div class="card">
-  <h2>新增訂單（店家用）</h2>
-  <textarea id="orderContent" rows="3" placeholder="訂單內容 / 地址"></textarea>
-  <input type="text" id="orderNote" placeholder="備註（選填）">
-  <button id="suggestBtn">建議派單</button>
-  <div id="suggestionBox" class="suggestion hidden"></div>
-  <div id="assignButtons" class="flex hidden">
-    <button id="confirmAssignBtn" class="secondary">確認派單</button>
-    <button id="manualAssignBtn" class="gray">手動選擇</button>
+<div class="card" id="ownerSection">
+  <div id="ownerLock" class="lock-overlay">
+    <p>🔒 店家功能已鎖定</p>
+    <input type="password" id="ownerPin" placeholder="輸入密碼解鎖" style="margin:10px 0;">
+    <button id="unlockBtn">解鎖</button>
   </div>
-  <div id="manualSelect" class="hidden">
-    <select id="driverSelect"></select>
-    <button id="assignSelectedBtn">派給選中司機</button>
+  <div id="ownerContent" class="hidden">
+    <h2>新增訂單（店家用）</h2>
+    <textarea id="orderContent" rows="3" placeholder="訂單內容 / 地址"></textarea>
+    <input type="text" id="orderNote" placeholder="備註（選填）">
+    <button id="suggestBtn">建議派單</button>
+    <div id="suggestionBox" class="suggestion hidden"></div>
+    <div id="assignButtons" class="flex hidden">
+      <button id="confirmAssignBtn" class="secondary">確認派單</button>
+      <button id="manualAssignBtn" class="gray">手動選擇</button>
+    </div>
+    <div id="manualSelect" class="hidden">
+      <select id="driverSelect"></select>
+      <button id="assignSelectedBtn">派給選中司機</button>
+    </div>
   </div>
 </div>
 
@@ -119,15 +127,30 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+// ========== 修改這裡的密碼 ==========
+const OWNER_PIN = "1234";
+// ====================================
+
 let drivers = [];
 let orders = [];
 let nextOrderId = 1;
 let myDriverId = localStorage.getItem('myDriverId') || null;
 let currentQueueIndex = 0;
+let isOwnerUnlocked = sessionStorage.getItem('ownerUnlocked') === 'true';
 const TIMEOUT_MS = 60 * 1000;
 
 function showStatus(msg) {
   document.getElementById('status').textContent = msg;
+}
+
+function updateOwnerUI() {
+  if (isOwnerUnlocked) {
+    document.getElementById('ownerLock').classList.add('hidden');
+    document.getElementById('ownerContent').classList.remove('hidden');
+  } else {
+    document.getElementById('ownerLock').classList.remove('hidden');
+    document.getElementById('ownerContent').classList.add('hidden');
+  }
 }
 
 async function initLiff() {
@@ -141,6 +164,7 @@ async function initLiff() {
     const profile = await liff.getProfile();
     document.getElementById('userInfo').textContent = `已登入：${profile.displayName}`;
     showStatus('載入完成');
+    updateOwnerUI();
     listenData();
     bindEvents();
   } catch (e) {
@@ -173,6 +197,7 @@ function listenData() {
 }
 
 function bindEvents() {
+  document.getElementById('unlockBtn').onclick = unlockOwner;
   document.getElementById('addDriverBtn').onclick = addDriver;
   document.getElementById('toggleMyStatusBtn').onclick = toggleMyStatus;
   document.getElementById('suggestBtn').onclick = suggestAssignment;
@@ -180,6 +205,18 @@ function bindEvents() {
   document.getElementById('manualAssignBtn').onclick = manualAssign;
   document.getElementById('assignSelectedBtn').onclick = assignToSelected;
   document.getElementById('clearCompletedBtn').onclick = clearCompletedOrders;
+}
+
+function unlockOwner() {
+  const pin = document.getElementById('ownerPin').value;
+  if (pin === OWNER_PIN) {
+    isOwnerUnlocked = true;
+    sessionStorage.setItem('ownerUnlocked', 'true');
+    updateOwnerUI();
+    document.getElementById('ownerPin').value = '';
+  } else {
+    alert('密碼錯誤');
+  }
 }
 
 async function addDriver() {
@@ -243,6 +280,7 @@ let suggested = null;
 let pending = null;
 
 function suggestAssignment() {
+  if (!isOwnerUnlocked) return alert('請先解鎖店家功能');
   const content = document.getElementById('orderContent').value.trim();
   if (!content) return alert('請輸入訂單內容');
   const next = getNextDriver();
@@ -255,12 +293,14 @@ function suggestAssignment() {
 }
 
 async function confirmAssign() {
+  if (!isOwnerUnlocked) return;
   if (!suggested || !pending) return;
   await assignOrder(suggested.id, pending.content, pending.note);
   clearPending();
 }
 
 function manualAssign() {
+  if (!isOwnerUnlocked) return;
   const online = getOnlineDriversSorted();
   const sel = document.getElementById('driverSelect');
   sel.innerHTML = online.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
@@ -268,6 +308,7 @@ function manualAssign() {
 }
 
 async function assignToSelected() {
+  if (!isOwnerUnlocked) return;
   const id = document.getElementById('driverSelect').value;
   if (!id || !pending) return;
   await assignOrder(id, pending.content, pending.note);
@@ -349,6 +390,7 @@ async function cancelOrder(id) {
 }
 
 async function clearCompletedOrders() {
+  if (!isOwnerUnlocked) return alert('請先解鎖店家功能');
   if (!confirm('確定清除所有已完成訂單？此動作無法復原。')) return;
   try {
     const completed = orders.filter(o => o.status === 'completed');
