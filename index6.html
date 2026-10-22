@@ -492,4 +492,46 @@ function render() {
       <div class="flex" style="width:auto;">
         ${o.status === 'accepted' ? `<button class="secondary small-btn" data-action="complete" data-id="${o.id}">完成</button>` : ''}
         ${isOwnerUnlocked && (o.status === 'pending' || o.status === 'rejected' || timedOut) ? `<button class="warning small-btn" data-action="reject" data-id="${o.id}">轉派下一位</button>` : ''}
-        ${isOwnerUnlocked ? `<button class="danger small-btn" data-action="cancel"
+        ${isOwnerUnlocked ? `<button class="danger small-btn" data-action="cancel" data-id="${o.id}">取消</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<p class="small">無進行中訂單</p>';
+
+  document.getElementById('activeOrders').onclick = (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    if (btn.dataset.action === 'complete') completeOrder(id);
+    if (btn.dataset.action === 'reject') rejectOrder(id);
+    if (btn.dataset.action === 'cancel') cancelOrder(id);
+  };
+
+  const completed = orders.filter(o => o.status === 'completed');
+  document.getElementById('completedOrders').innerHTML = completed.length ? completed.map(o => `
+    <div class="order-item">
+      <div>
+        <strong>#${o.orderNumber}</strong> → ${o.driverName || '未知'} <span class="completed-tag">已完成</span><br>
+        <span class="small">${o.content}</span>
+        ${o.note ? `<div class="note">備註：${o.note}</div>` : ''}
+        ${o.completedAt ? `<br><span class="small">完成時間：${new Date(o.completedAt).toLocaleString('zh-TW')}</span>` : ''}
+      </div>
+    </div>
+  `).join('') : '<p class="small">尚無已完成訂單</p>';
+}
+
+function updateMyButton() {
+  const d = drivers.find(x => x.id === myDriverId);
+  const btn = document.getElementById('toggleMyStatusBtn');
+  if (d) {
+    btn.textContent = d.status === 'online' ? '下線' : '上線';
+    btn.className = d.status === 'online' ? 'danger' : 'secondary';
+  } else {
+    btn.textContent = '請先選擇身分';
+  }
+}
+
+setInterval(render, 10000);
+initLiff();
+</script>
+</body>
+</html>
