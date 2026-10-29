@@ -242,6 +242,19 @@ async function addDriver() {
   }
 }
 
+async function deleteDriver(driverId) {
+  if (!isOwnerUnlocked) return alert('請先解鎖店家功能');
+  const driver = drivers.find(d => d.id === driverId);
+  if (!driver) return;
+  if (!confirm(`確定要刪除司機「${driver.name}」嗎？此動作無法復原。`)) return;
+  try {
+    await deleteDoc(doc(db, 'drivers', driverId));
+    alert(`已刪除司機：${driver.name}`);
+  } catch (err) {
+    alert('刪除失敗：' + err.message);
+  }
+}
+
 async function toggleMyStatus() {
   if (!myDriverId) return alert('請先選擇你是誰');
   const driver = drivers.find(d => d.id === myDriverId);
@@ -539,8 +552,15 @@ function render() {
         </div>
         <div class="stats">已完成 ${stats.completed}　拒絕 ${stats.rejected}　未接 ${stats.pending}</div>
       </div>
+      ${isOwnerUnlocked ? `<button class="danger small-btn" data-action="deleteDriver" data-id="${d.id}">刪除</button>` : ''}
     </div>`;
   }).join('') || '<p class="small">尚無司機</p>';
+
+  document.getElementById('driversList').onclick = (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.action === 'deleteDriver') deleteDriver(btn.dataset.id);
+  };
 
   document.getElementById('queueList').innerHTML = onlineSorted.length ? onlineSorted.map((d, i) => `
     <div style="padding:6px 0; border-bottom:1px solid #eee;">
