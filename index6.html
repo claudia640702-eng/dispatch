@@ -140,7 +140,7 @@ let drivers = [];
 let orders = [];
 let nextOrderId = 1;
 let myDriverId = localStorage.getItem('myDriverId') || null;
-let currentQueueIndex = 0;
+let lastAssignedDriverId = localStorage.getItem('lastAssignedDriverId') || null;
 let isOwnerUnlocked = sessionStorage.getItem('ownerUnlocked') === 'true';
 const TIMEOUT_MS = 3 * 60 * 1000;
 
@@ -279,12 +279,22 @@ function getOnlineDriversSorted() {
     });
 }
 
-function getNextDriver(excludeId = null) {
-  const online = getOnlineDriversSorted().filter(d => d.id !== excludeId);
+function getNextDriver() {
+  const online = getOnlineDriversSorted();
   if (!online.length) return null;
-  if (currentQueueIndex >= online.length) currentQueueIndex = 0;
-  const next = online[currentQueueIndex];
-  currentQueueIndex = (currentQueueIndex + 1) % online.length;
+
+  if (!lastAssignedDriverId) {
+    lastAssignedDriverId = online[0].id;
+    localStorage.setItem('lastAssignedDriverId', lastAssignedDriverId);
+    return online[0];
+  }
+
+  const lastIndex = online.findIndex(d => d.id === lastAssignedDriverId);
+  const nextIndex = (lastIndex + 1) % online.length;
+  const next = online[nextIndex];
+
+  lastAssignedDriverId = next.id;
+  localStorage.setItem('lastAssignedDriverId', lastAssignedDriverId);
   return next;
 }
 
@@ -382,6 +392,8 @@ async function assignOrder(driverId, content, note, existingId = null) {
   const orderRef = existingId ? doc(db, 'orders', existingId) : doc(db, 'orders', Date.now().toString());
   try {
     await setDoc(orderRef, orderData);
+    lastAssignedDriverId = driverId;
+    localStorage.setItem('lastAssignedDriverId', lastAssignedDriverId);
     alert(`已派給 ${driver.name}（待接單）`);
   } catch (err) {
     alert('派單失敗：' + err.message);
@@ -428,7 +440,7 @@ async function rejectOrder(orderId) {
   try {
     const rejectedBy = [...(order.rejectedBy || []), order.driverName || '未知'];
     await updateDoc(doc(db, 'orders', orderId), { status: 'rejected', driverId: null, driverName: null, rejectedBy });
-    const next = getNextDriver(order.driverId);
+    const next = getNextDriver();
     if (next && confirm(`建議轉派給 ${next.name}？`)) {
       await assignOrder(next.id, order.content, order.note, orderId);
     }
@@ -565,7 +577,7 @@ function render() {
   document.getElementById('queueList').innerHTML = onlineSorted.length ? onlineSorted.map((d, i) => `
     <div style="padding:6px 0; border-bottom:1px solid #eee;">
       ${i + 1}. <strong>${d.name}</strong>
-      ${i === (currentQueueIndex % onlineSorted.length) ? ' ← 下一單' : ''}
+      ${d.id === lastAssignedDriverId ? ' ← 上一單' : ''}
     </div>
   `).join('') : '<p class="small">目前無人上線</p>';
 
